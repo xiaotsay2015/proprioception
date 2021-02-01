@@ -1,0 +1,615 @@
+---
+title: "Exp 1 Proprioception analysis: Gradual Adaptation"
+output: html_notebook
+---
+
+```{r}
+
+rm(list = ls())
+library(tidyverse)
+library(ggpubr)
+library(pracma)
+library(dplyr)
+library(plotrix)
+library(lemon)
+
+my.colors <-  c('darkred', "#006600", "#800080")
+my.colors2 <-  c("#006600", "#800080", "#FF9900", 'deepskyblue4')
+text_size <- 22
+
+dispersion1 <- function(P1x, P1y){
+  distance1 = sqrt( (P1x - mean(P1x))^2 + (P1y - mean(P1y))^2)
+  my.dispersion = mean(distance1, na.rm = TRUE)
+  return(my.dispersion)
+}
+
+dispersion2 <- function(P1x, P1y, P2x, P2y){
+  distance1 = sqrt( (P1x - mean(P1x))^2 + (P1y - mean(P1y))^2)
+  distance2 = sqrt( (P2x - mean(P2x))^2 + (P2y - mean(P2y))^2)
+  my.dispersion = mean(c(distance1, distance2), na.rm = TRUE)
+  return(my.dispersion)
+}
+
+format_pval <- function(pval){
+  pval <- scales::pvalue(pval, accuracy= 0.001, add_p = TRUE)
+  gsub(pattern = "(=|<)", replacement = " \\1 ", x = pval)
+}
+
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+  return(data_sum)
+}
+
+data_summary_med <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = median(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+  return(data_sum)
+}
+
+data_summary_grp <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      sem = std.error(x[[col]], na.rm=TRUE))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+  return(data_sum)
+}
+
+```
+
+
+```{r}
+th <- theme(   panel.grid.major = element_blank(),
+               panel.grid.minor = element_blank(),
+               panel.border = element_blank(),
+               panel.background = element_blank(),
+               axis.line = element_line(size = 0.5), 
+               legend.position = 'right', 
+               legend.text = element_text(size= text_size, family="Helvetica"),
+               text = element_text(size= text_size, family="Helvetica"), 
+               strip.text.x = element_text(size = rel(0.90)), 
+               strip.text.y = element_text(size = rel(0.90)), 
+               axis.text.x = element_text(size = rel(0.85)),
+               axis.text.y = element_text(size = rel(0.85)),
+               axis.title.y = element_text(margin = margin(t = 0, r = 8, b = 0, l = 0), angle = 90), 
+               axis.title.x = element_text(vjust=-0.2), 
+               plot.title = element_text(hjust = 0.5, vjust = -7), 
+               axis.ticks.length=unit(0.25, "cm"), 
+               axis.ticks = element_line(size = 0.5))
+my.colors <-  c("#006600", "#800080", "#FF9900", 'deepskyblue4')
+```
+
+
+Load Data and Define Parameters 
+```{r}
+
+e1.data <- read.csv('~/Dropbox/MOTOR/proprioception/Data/E1_processed_data.csv',header=TRUE, sep=",") %>%
+  mutate(Direction = ifelse(rot_cond == 30, 'CCW', 'CW')) %>% 
+  mutate(Hand = hand_theta_maxv) %>% 
+  select(SN, TN, CN, day_num, Direction, Hand, ri, ti, fbi, MT, RT, FC_bias_X, FC_bias_Y, prop_theta, PropLocX, PropLocY, ri, PropTestAng)
+
+e1.hand <- e1.data %>%  
+  select(SN, TN, CN, day_num, Direction, ri, Hand, ti, fbi, MT, RT) %>%
+  drop_na
+
+e1.prop <- e1.data %>%
+  select(SN, TN, CN, day_num, Direction,  FC_bias_X, FC_bias_Y, prop_theta, PropLocX, PropLocY, PropTestAng) %>%
+  drop_na
+
+reach.tar <- sort(unique(e1.hand$ti))
+num.reach.tar <- length(reach.tar)
+num.reach.trials <- nrow(e1.hand[e1.hand$SN == 1 & e1.hand$day_num == 1, ])
+
+subjects <- unique(e1.hand$SN)
+num.subj <- length(subjects)
+
+probetarget <- unique(e1.prop$PropTestAng)
+num.probetest <- length(probetarget)
+num.probe.trials <- nrow(e1.prop[e1.prop$SN == 1 & e1.prop$day_num == 1, ])
+
+```
+
+Flip CW vs CCW
+```{r}
+
+e1.prop$prop_theta[e1.prop$Direction == 'CCW'] <- -e1.prop$prop_theta[e1.prop$Direction == 'CCW'] 
+e1.hand$Hand[e1.hand$Direction == 'CCW'] <- -e1.hand$Hand[e1.hand$Direction == 'CCW'] 
+
+```
+
+Remove Outliers (Don't do this yet: Flip Direction)
+```{r}
+
+# Hand Angle 
+subj_compile <-  setNames(as.data.frame(matrix(0, ncol = num.reach.tar * 2 + 3, nrow = num.subj*2 )), 
+                          c('SN', 'Day', 'Direction',  sprintf('T%s_rm', reach.tar), sprintf('T%s_sd', reach.tar)))
+
+subj_compile$SN <- rep(subjects, each = 2)
+subj_compile$Day <- rep(1:2, 30)
+
+for(si in 1:num.subj ){
+  for(mi in 1:num.reach.tar ){
+    for(di in 1:2){ # loop across days 
+      idx_sub <- e1.hand$SN == subjects[si] & e1.hand$ti == reach.tar[mi] & e1.hand$day_num == di
+      smoothed_sd <- sd( e1.hand$Hand[idx_sub] - movavg(e1.hand$Hand[idx_sub], 5, type=c("s"))) 
+      idx_remove <- ( abs(e1.hand$Hand[idx_sub] - movavg(e1.hand$Hand[idx_sub], 5, type=c("s"))))  > 3*smoothed_sd
+      e1.hand$Hand[idx_sub][idx_remove] <- NaN
+    
+      smoothed_RT_sd <- sd( e1.hand$RT[idx_sub] - movavg(e1.hand$RT[idx_sub], 5, type=c("s"))) 
+      idx_RT_remove <- ( abs(e1.hand$RT[idx_sub] - movavg(e1.hand$RT[idx_sub], 5, type=c("s"))))  > 3*smoothed_RT_sd
+      e1.hand$RT[idx_sub][idx_RT_remove] <- NaN
+      
+      subj_compile[ subj_compile$SN == subjects[si] & subj_compile$Day == di, sprintf('T%s_rm', reach.tar[mi]) ] <- length(e1.hand$Hand[idx_sub][idx_remove])
+      subj_compile[ subj_compile$SN == subjects[si] & subj_compile$Day == di, sprintf('T%s_sd', reach.tar[mi]) ] <-  smoothed_sd
+      subj_compile[ subj_compile$SN == subjects[si] & subj_compile$Day == di, 'Direction'] <- unique(e1.hand$Direction[idx_sub])
+    }
+  }
+}
+
+
+# Proprioception
+subjprop_compile <-  setNames(as.data.frame(matrix(0, ncol = 6, nrow = num.subj*2 )), 
+                              c('SN', 'Day', 'Direction',  'Num_Rm', 'SD', 'PropVar_Rm'))
+
+subjprop_compile$SN <- rep(subjects, each = 2)
+subjprop_compile$Day <- rep(1:2, 30)
+
+for(si in 1:num.subj ){
+  for(di in 1:2){ # loop across days 
+    idx_sub <- e1.prop$SN == subjects[si] & e1.prop$day_num == di
+    smoothed_sd <- sd( e1.prop$prop_theta[idx_sub] - movavg(e1.prop$prop_theta[idx_sub], 5, type=c("s"))) 
+    idx_remove <- ( abs(e1.prop$prop_theta[idx_sub] - movavg(e1.prop$prop_theta[idx_sub], 5, type=c("s"))))  > 99*smoothed_sd
+    
+    e1.prop$prop_theta[idx_sub][idx_remove] <- NaN
+    
+    subjprop_compile[ subjprop_compile$SN == subjects[si] & subjprop_compile$Day == di, 'Num_Rm' ] <- length(e1.prop$prop_theta[idx_sub][idx_remove])
+    subjprop_compile[ subjprop_compile$SN == subjects[si] & subjprop_compile$Day == di, 'SD' ] <-  smoothed_sd
+    subjprop_compile[ subjprop_compile$SN == subjects[si] & subjprop_compile$Day == di, 'Direction'] <- unique(e1.prop$Direction[idx_sub])
+    
+    center_x <- mean ( e1.prop$FC_bias_X[idx_sub], na.rm = TRUE)
+    center_y <- mean ( e1.prop$FC_bias_Y[idx_sub], na.rm = TRUE)
+    sd_x <- sd ( e1.prop$FC_bias_X[idx_sub], na.rm = TRUE)
+    sd_y <- sd ( e1.prop$FC_bias_Y[idx_sub], na.rm = TRUE)
+    idx_propremove_x <- ( abs(e1.prop$FC_bias_X[idx_sub] - center_x) > 99*sd_x ) 
+    idx_propremove_y <- ( abs(e1.prop$FC_bias_Y[idx_sub] - center_y) > 99*sd_y ) 
+    
+    e1.prop$FC_bias_X[idx_sub][idx_propremove_x] <- NaN
+    e1.prop$FC_bias_Y[idx_sub][idx_propremove_y] <- NaN
+    
+    subjprop_compile[ subjprop_compile$SN == subjects[si] & subjprop_compile$Day == di, 'PropVar_Rm'] <- sum(idx_propremove_x) + sum(idx_propremove_y)
+  }
+}
+
+
+```
+
+
+
+Baseline Subtraction 
+```{r}
+
+bias_compile <-  setNames(as.data.frame(matrix(0, ncol = num.reach.tar + 3, nrow = num.subj*2 )), 
+                          c('SN', 'Day', 'Direction',  sprintf('T%s_bias', reach.tar)))
+bias_compile$SN <- rep(subjects, each = 2)
+bias_compile$Day <- rep(1:2, 30)
+
+for(si in 1:num.subj){
+  for(mi in 1:num.reach.tar){
+    for(di in 1:2){
+      idx_sub <- e1.hand$SN == subjects[si] & e1.hand$ti == reach.tar[mi] & e1.hand$day_num == di
+      idx_bl <- idx_sub & e1.hand$CN >= 3 & e1.hand$CN <= 4
+      idx_bl2 <- idx_sub & e1.hand$CN >= 1 & e1.hand$CN <= 2
+      sub_mean <- mean(e1.hand$Hand[idx_bl], na.rm = TRUE)
+      e1.hand$Hand[idx_sub] <- e1.hand$Hand[idx_sub] - sub_mean
+      
+      bias_compile[ bias_compile$SN == subjects[si] & bias_compile$Day == di, sprintf('T%s_bias', reach.tar[mi]) ] <- sub_mean
+      bias_compile[ bias_compile$SN == subjects[si] & bias_compile$Day == di, 'Direction'] <- unique(e1.hand$Direction[idx_sub])
+    }
+  }
+}
+
+
+biasprp_compile <-  setNames(as.data.frame(matrix(0, ncol = 8, nrow = num.subj*2 )), 
+                          c('SN', 'Day', 'Direction',  sprintf('T%s_bias', probetarget)))
+biasprp_compile$SN <- rep(subjects, each = 2)
+biasprp_compile$Day <- rep(1:2, 30)
+  
+for(si in 1:num.subj){
+  for(mi in 1:num.probetest){
+    for(di in 1:2){
+      idx_sub <- e1.prop$SN == subjects[si] & e1.prop$day_num == di & e1.prop$PropTestAng == probetarget[mi]
+      idx_bl <- idx_sub & e1.prop$CN >= 5 & e1.prop$CN <= 14 & e1.prop$PropTestAng == probetarget[mi]
+      sub_mean <- mean(e1.prop$prop_theta[idx_bl], na.rm = TRUE)
+      e1.prop$prop_theta[idx_sub] <- e1.prop$prop_theta[idx_sub] - sub_mean
+      
+      biasprp_compile[ biasprp_compile$SN == subjects[si] & biasprp_compile$Day == di, sprintf('T%s_bias', probetarget[mi])] <- sub_mean
+      biasprp_compile[ biasprp_compile$SN == subjects[si] & biasprp_compile$Day == di, 'Direction'] <- unique(e1.prop$Direction[idx_sub])
+      
+    }
+  }
+}
+
+```
+
+
+
+Plot Group:Day
+```{r}
+
+# collapse across targets
+e1.ind.hand <- e1.hand %>% 
+  data_summary(varname = 'Hand', groupnames = c('SN', 'TN', 'fbi', 'day_num', 'ri')) %>% 
+  mutate(ri = abs(ri))
+
+e1.ind.prop <- e1.prop %>%
+  data_summary(varname = 'prop_theta', groupnames = c('SN', 'TN', 'day_num'))
+
+# collapse across ind
+e1.grp.hand <- e1.ind.hand %>% 
+  data_summary_grp(varname = 'Hand', groupnames = c('TN', 'fbi', 'day_num', 'ri'))
+
+e1.grp.prop <- e1.ind.prop %>% 
+  data_summary_grp(varname = 'prop_theta', groupnames = c('TN', 'day_num'))
+
+e1.learnhand <- e1.grp.hand
+e1.learnhand$Hand[e1.learnhand$fbi == 0 & e1.learnhand$CN > 4 &  e1.learnhand$CN < 85] <- NA
+e1.learnhand$sem[e1.learnhand$fbi == 0 & e1.learnhand$CN > 4 &  e1.learnhand$CN < 85] <- NA
+e1.afterhand <- e1.grp.hand %>% filter(fbi == 0 & TN > 16 )
+
+add_Day <- function(x){
+  new_Day <- sprintf('Day %s', x)
+}
+
+my.grp.plot <- ggplot(data = e1.learnhand, aes(x = TN, y = Hand)) + 
+  annotate('segment', x = 0, xend = 450, y = 0, yend = 0) + 
+  annotate('segment', x = c(10.5, 20.5, 70.5, 160.5, 165.5, 195.5, 235.5, 265.5, 305.5, 310.5, 340.5, 380.5, 385.5, 415.5, 420.5), xend =c(10.5, 20.5, 70.5, 160.5, 165.5, 195.5, 235.5, 265.5, 305.5, 310.5, 340.5, 380.5, 385.5, 415.5, 420.5), y = -10, yend = 30, linetype = 'dotted', color = 'grey') + 
+  
+   annotate('rect', xmin = 0, xmax = 10, ymin = -10, ymax = 30, fill = 'grey', alpha = 0.6) + 
+   annotate('rect', xmin = 160.5, xmax = 165.5, ymin = -10, ymax = 30, fill = 'grey', alpha = 0.6) + 
+   annotate('rect', xmin = 305.5, xmax = 310.5, ymin = -10, ymax = 30, fill = 'grey', alpha = 0.6) + 
+   annotate('rect', xmin = 380.5, xmax = 385.5, ymin = -10, ymax = 30, fill = 'grey', alpha = 0.6) + 
+   annotate('rect', xmin = 415.5, xmax = 420.5, ymin = -10, ymax = 30, fill = 'grey', alpha = 0.6) + 
+  
+  annotate('rect', xmin = 10, xmax = 20, ymin = -10, ymax = 30, fill = 'grey', alpha = 0.2) +
+  annotate('rect', xmin = 420.5, xmax = 450, ymin = -10, ymax = 30, fill = 'grey', alpha = 0.2) +
+  
+  geom_point(color = my.colors[1], alpha = 0.65, size = 0.5) + 
+  geom_ribbon(data = e1.learnhand[e1.learnhand$TN <= 20, ], aes(x = TN, ymin = Hand - sem, ymax = Hand + sem), alpha = 0.2, fill = my.colors[1], inherit.aes = FALSE) + 
+  geom_ribbon(data = e1.learnhand[e1.learnhand$TN  >= 70 & e1.learnhand$TN  <= 160, ], aes(x = TN, ymin = Hand - sem, ymax = Hand + sem), alpha = 0.2, fill = my.colors[1], inherit.aes = FALSE) + 
+  geom_ribbon(data = e1.learnhand[e1.learnhand$TN  >= 196 & e1.learnhand$TN  <= 265, ], aes(x = TN, ymin = Hand - sem, ymax = Hand + sem), alpha = 0.2, fill = my.colors[1], inherit.aes = FALSE) + 
+  geom_ribbon(data = e1.learnhand[e1.learnhand$TN  >= 266 & e1.learnhand$TN  <= 305, ], aes(x = TN, ymin = Hand - sem, ymax = Hand + sem), alpha = 0.2, fill = my.colors[1], inherit.aes = FALSE) + 
+  geom_ribbon(data = e1.learnhand[e1.learnhand$TN  >= 341 & e1.learnhand$TN  <= 380, ], aes(x = TN, ymin = Hand - sem, ymax = Hand + sem), alpha = 0.2, fill = my.colors[1], inherit.aes = FALSE) + 
+  geom_ribbon(data = e1.learnhand[e1.learnhand$TN  >= 416 , ], aes(x = TN, ymin = Hand - sem, ymax = Hand + sem), alpha = 0.2, fill = my.colors[1], inherit.aes = FALSE) + 
+  
+  geom_point(data = e1.afterhand, aes(x = TN, y = Hand), inherit.aes = FALSE, color = my.colors[3], alpha = 0.65, size = 0.5) + 
+  geom_ribbon(data = e1.afterhand[e1.afterhand$TN >= 161 & e1.afterhand$TN <= 165, ], aes(x = TN, ymin = Hand - sem, ymax = Hand + sem), fill = my.colors[3],inherit.aes = FALSE, alpha = 0.2) + 
+  geom_ribbon(data = e1.afterhand[e1.afterhand$TN >= 306 & e1.afterhand$TN <= 310, ], aes(x = TN, ymin = Hand - sem, ymax = Hand + sem), fill = my.colors[3],inherit.aes = FALSE, alpha = 0.2) + 
+  geom_ribbon(data = e1.afterhand[e1.afterhand$TN >= 381 & e1.afterhand$TN <= 385, ], aes(x = TN, ymin = Hand - sem, ymax = Hand + sem), fill = my.colors[3],inherit.aes = FALSE, alpha = 0.2) + 
+  geom_ribbon(data = e1.afterhand[e1.afterhand$TN >= 416 & e1.afterhand$TN <= 420, ], aes(x = TN, ymin = Hand - sem, ymax = Hand + sem), fill = my.colors[3],inherit.aes = FALSE, alpha = 0.2) + 
+  
+  geom_point(data = e1.grp.prop, aes(x = TN, y = prop_theta), inherit.aes = FALSE, color = my.colors[2], alpha = 0.65, size = 0.5) + 
+  geom_ribbon(data = e1.grp.prop[e1.grp.prop$TN >= 21 & e1.grp.prop$TN <= 70, ], aes(x = TN, ymin = prop_theta - sem, ymax = prop_theta + sem), fill = my.colors[2],  inherit.aes = FALSE, alpha = 0.2) +
+  geom_ribbon(data = e1.grp.prop[e1.grp.prop$TN >= 166 & e1.grp.prop$TN <= 195, ], aes(x = TN, ymin = prop_theta - sem, ymax = prop_theta + sem), fill = my.colors[2],  inherit.aes = FALSE, alpha = 0.2) +
+  geom_ribbon(data = e1.grp.prop[e1.grp.prop$TN >= 236 & e1.grp.prop$TN <= 265, ], aes(x = TN, ymin = prop_theta - sem, ymax = prop_theta + sem), fill = my.colors[2],  inherit.aes = FALSE, alpha = 0.2) +
+  geom_ribbon(data = e1.grp.prop[e1.grp.prop$TN >= 311 & e1.grp.prop$TN <= 340, ], aes(x = TN, ymin = prop_theta - sem, ymax = prop_theta + sem), fill = my.colors[2],  inherit.aes = FALSE, alpha = 0.2) +
+  geom_ribbon(data = e1.grp.prop[e1.grp.prop$TN >= 386 & e1.grp.prop$TN <= 415, ], aes(x = TN, ymin = prop_theta - sem, ymax = prop_theta + sem), fill = my.colors[2],  inherit.aes = FALSE, alpha = 0.2) +
+  facet_rep_grid(.~day_num, repeat.tick.labels = TRUE, scale = 'free_y', labeller = labeller(day_num =add_Day )) + 
+  scale_y_continuous(limits = c(-10, 30)) + 
+  scale_x_continuous(limits = c(0, 450), breaks = seq(0, 450, 75)) +
+  coord_capped_cart(left = 'both', bottom = 'both') +
+  labs(x = 'Trial Number', y = 'Hand Angle (°)') +
+  th + theme(axis.title.y = element_text(margin = margin(l = 0, r = 7, t = 0, b = 0)), text = element_text(size=22))
+
+print(my.grp.plot)
+
+```
+
+Summary Parameters 
+```{r}
+
+hand_param <- setNames(as.data.frame(matrix(NaN, ncol = 24, nrow = num.subj * 2)), 
+                            c('SN', 'Day', 'AEBase', 
+                              'AE1', 'AE2', 'AE3','AE4', 'AE', 
+                              'PBbase', 
+                              'PB1', 'PB2', 'PB3','PB4', 'PB', 
+                              'PB0var','PB1var', 'PB2var', 'PB3var', 'PB4var','PBvar_ang', 
+                              'PBvarbase', 'PBvarall', 'AEall', 'PBshiftall'))
+
+prop_start <- c(21, 166, 236, 311, 386)
+prop_end <- c(70, 195, 265, 340, 415)
+
+counter <- 1
+for(si in 1:num.subj){
+  for(di in 1:2){
+    
+    idx.hand <- e1.ind.hand$SN == subjects[si] & e1.ind.hand$day_num == di
+    idx.prop <- e1.ind.prop$SN == subjects[si] & e1.ind.prop$day_num == di
+    
+    hand_param$SN[counter] <- subjects[si]
+    hand_param$Day[counter] <- di
+    hand_param$Direction[counter] <- unique(e1.hand$Direction[e1.hand$SN == subjects[si] & e1.hand$day_num == di])
+    hand_param$AEBase[counter] <- mean(e1.ind.hand$Hand[idx.hand & e1.ind.hand$TN >= 11 & e1.ind.hand$TN <= 20], na.rm = TRUE)
+       
+    hand_param$AE1[counter] <- mean(e1.ind.hand$Hand[idx.hand & e1.ind.hand$TN >=  161 & e1.ind.hand$TN <=  165], na.rm = TRUE)
+    hand_param$AE2[counter] <- mean(e1.ind.hand$Hand[idx.hand & e1.ind.hand$TN >=  306  & e1.ind.hand$TN <= 310], na.rm = TRUE)
+    hand_param$AE3[counter] <- mean(e1.ind.hand$Hand[idx.hand & e1.ind.hand$TN >=  381  & e1.ind.hand$TN <=  385], na.rm = TRUE)
+    hand_param$AE4[counter] <- mean(e1.ind.hand$Hand[idx.hand & e1.ind.hand$TN >=  416  & e1.ind.hand$TN <=  420], na.rm = TRUE)
+    hand_param$AE[counter] <-  mean(c(e1.ind.hand$Hand[idx.hand & e1.ind.hand$TN >=  306  & e1.ind.hand$TN <= 310], e1.ind.hand$Hand[idx.hand & e1.ind.hand$TN >=  381  & e1.ind.hand$TN <=  385]), na.rm = TRUE)
+    
+    hand_param$PBbase[counter] <- mean(e1.ind.prop$prop_theta[idx.prop & e1.ind.prop$TN >=  21 & e1.ind.prop$TN <=  70], na.rm = TRUE)
+    
+    hand_param$PB1[counter] <- mean(e1.ind.prop$prop_theta[idx.prop & e1.ind.prop$TN >=  166 & e1.ind.prop$TN <=  195], na.rm = TRUE)
+    hand_param$PB2[counter] <- mean(e1.ind.prop$prop_theta[idx.prop & e1.ind.prop$TN >=  236 & e1.ind.prop$TN <=  265], na.rm = TRUE)
+    hand_param$PB3[counter] <- mean(e1.ind.prop$prop_theta[idx.prop & e1.ind.prop$TN >=  311 & e1.ind.prop$TN <=  340], na.rm = TRUE)
+    hand_param$PB4[counter] <- mean(e1.ind.prop$prop_theta[idx.prop & e1.ind.prop$TN >=  386 & e1.ind.prop$TN <=  415], na.rm = TRUE)
+    hand_param$PB[counter] <-  mean(e1.ind.prop$prop_theta[idx.prop & e1.ind.prop$TN >=  166], na.rm = TRUE)
+    hand_param$PBvar_ang[counter] <-  sd ( e1.ind.prop$prop_theta[idx.prop & e1.ind.prop$TN >=  166] )
+    
+    idx_var1 <- e1.prop$SN == si & e1.prop$TN >= prop_start[1] & e1.prop$TN <= prop_end[1] & e1.prop$day_num == di
+    idx_var2 <- e1.prop$SN == si & e1.prop$TN >= prop_start[2] & e1.prop$day_num == di
+    
+    hand_param$PBvardayall[counter] <- dispersion2(e1.prop$FC_bias_X[idx_var1], e1.prop$FC_bias_Y[idx_var1], e1.prop$FC_bias_X[idx_var2], e1.prop$FC_bias_Y[idx_var2])
+    
+    counter <- counter + 1
+  }
+}
+
+counter = 1
+for(si in 1:num.subj){
+  for(di in 1:2){
+    for(mi in 1:5){
+      idx_var1 <- e1.prop$SN == si & e1.prop$day_num == di & e1.prop$TN >= prop_start[mi] & e1.prop$TN <= prop_end[mi]
+      hand_param[counter, sprintf('PB%svar', mi - 1)] <- sd ( e1.prop$prop_theta[idx_var1] )
+    }
+    counter = counter + 1
+  }
+}
+
+# For Correlation plot, pooling together both days 
+counter = 1
+for(si in 1:num.subj){
+  idx.hand1 <- e1.ind.hand$SN == subjects[si] & e1.ind.hand$TN >=  381  & e1.ind.hand$TN <=  385 
+  idx.hand2 <- e1.ind.hand$SN == subjects[si] & e1.ind.hand$TN >=  306  & e1.ind.hand$TN <=  310 
+  
+  hand_param$AEall[counter] <- mean(e1.ind.hand$Hand[idx.hand1 | idx.hand2], na.rm = TRUE)
+  
+  idx_var1 <- e1.prop$SN == si & e1.prop$TN >= prop_start[1] & e1.prop$TN <= prop_end[1]
+  idx_var2 <- e1.prop$SN == si & e1.prop$TN >= prop_start[2] 
+  idx_var3 <- e1.prop$SN == si & e1.prop$TN >= prop_start[1] 
+  hand_param[counter, 'PBvarbase'] <- dispersion1(e1.prop$FC_bias_X[idx_var1], e1.prop$FC_bias_Y[idx_var1])
+  hand_param[counter, 'PBvarall'] <-  dispersion1(e1.prop$FC_bias_X[idx_var3], e1.prop$FC_bias_Y[idx_var3])
+  hand_param[counter, 'PBvarall_ang'] <-  sd ( e1.prop$prop_theta[idx_var3] - mean(e1.prop$prop_theta[idx_var1]) )
+  
+  idx_shift1 <- e1.prop$SN == si & e1.prop$TN >= prop_start[2] 
+  hand_param[counter, 'PBshiftall'] <- mean(e1.prop$prop_theta[idx_shift1], na.rm = TRUE)
+  
+  counter = counter + 2
+  
+}
+
+```
+
+Correlations
+```{r}
+
+ae.plot <- hand_param %>% gather(cond, value, c("AEBase","AE1", "AE2", "AE3", "AE4")) %>% 
+  mutate(cond = ifelse(cond == 'AEBase', 'AE0', cond) ) %>%
+  mutate(AEorder = case_when( cond == 'AE0' ~ 1, 
+                              cond == 'AE1' ~ 2, 
+                              cond == 'AE2' ~ 3, 
+                              cond == 'AE3' ~ 4, 
+                              cond == 'AE4' ~ 5) ) %>%
+  mutate(cond = fct_reorder(cond, AEorder) ) %>%
+  ggplot(aes(x = cond, y = value, fill = cond)) + 
+  geom_line(inherit.aes = FALSE, aes(x = cond, y = value, group = SN), color = my.colors[3], alpha = 0.1) + 
+  geom_boxplot(width = 0.25, outlier.shape = NA, alpha = 0.5, size = 0.5) + 
+  stat_summary(fun = 'mean', geom = 'point', color = 'black', size = 2) + 
+  facet_rep_grid(.~Day, repeat.tick.labels = TRUE, labeller = labeller(Day= add_Day )) +
+  scale_y_continuous() + 
+  scale_fill_manual(values = c('darkgreen', my.colors[3], my.colors[3], my.colors[3], my.colors[3]), guide = FALSE) + 
+  coord_capped_cart(left = 'both', bottom = 'both', ylim = c(-10, 40)) +
+  labs(x = ' ', y = 'Hand Angle (°)') +
+  th + theme(axis.title.y = element_text(margin = margin(l = 0, r = 21, t = 0, b = 0) ))
+print(ae.plot)
+
+```
+
+```{r}
+
+ps.plot <- hand_param %>% gather(cond, value, c("PBbase","PB1", "PB2", "PB3", "PB4")) %>%
+  mutate(cond = ifelse(cond == 'PBbase', 'PB0', cond) ) %>%
+  mutate(PBorder = case_when( cond == 'PB0' ~ 1, 
+                              cond == 'PB1' ~ 2, 
+                              cond == 'PB2' ~ 3, 
+                              cond == 'PB3' ~ 4, 
+                              cond == 'PB4' ~ 5) ) %>%
+  mutate(cond = fct_reorder(cond, PBorder) ) %>%
+  ggplot(aes(x = cond, y = value)) + 
+  geom_line(inherit.aes = FALSE, aes(x = cond, y = value, group = SN), color = my.colors[2], alpha = 0.1) + 
+  geom_boxplot(fill =   my.colors[2], width = 0.25, outlier.shape = NA, alpha = 0.5) + 
+  stat_summary(fun = 'mean', geom = 'point', color = 'black', size = 2) + 
+  facet_rep_grid(.~Day, repeat.tick.labels = TRUE, labeller = labeller(Day= add_Day )) +
+  scale_y_continuous() + 
+  coord_capped_cart(left = 'both', bottom = 'both', ylim = c(-25, 20)) +
+  labs(x = ' ', y = 'Proprioceptive Error (°)') +
+  th
+print(ps.plot)
+
+```
+
+```{r}
+
+pv.plot <- hand_param %>% gather(cond, value, PB0var:PB4var) %>% 
+  mutate(cond2 = cond) %>% 
+  mutate(cond2 = ifelse(cond == 'PB0var', 'PB0', 
+                        ifelse(cond == 'PB1var', 'PB1', 
+                               ifelse(cond == 'PB2var', 'PB2', 
+                                      ifelse(cond == 'PB3var', 'PB3', 
+                                             ifelse(cond == 'PB4var', 'PB4', 'PB5') ) ) ) ) ) %>% 
+  ggplot(aes(x = cond2, y = value)) + 
+  geom_line(inherit.aes = FALSE, aes(x = cond2, y = value, group = SN), color = my.colors2[4], alpha = 0.1) + 
+  geom_boxplot(fill =   my.colors2[4], width = 0.25, outlier.shape = NA, alpha = 0.5) + 
+  stat_summary(fun = 'mean', geom = 'point', color = 'black', size = 2) + 
+  facet_rep_grid(.~Day, repeat.tick.labels = TRUE, labeller = labeller(Day= add_Day )) +
+  scale_y_continuous() + 
+  scale_x_discrete(expand=c(0,0.6)) + 
+  coord_capped_cart(left = 'both', bottom = 'both', ylim = c(0, 25)) +
+  labs(x = ' ', y = 'Proprioceptive Variability (°)') +
+  th + theme(axis.title.y = element_text(margin = margin(l = 0, r = 15, t = 0, b = 0)), text = element_text(size=22))
+print(pv.plot)
+
+```
+
+
+Day 1 v Day 2 Reliability
+```{r}
+  
+ae.rel <- hand_param %>%  
+  select(SN, Day, AE) %>% 
+  spread(Day, AE) %>% 
+  ggplot(aes(x = `1`, y = `2`)) +
+  geom_point(color = my.colors[3], size = 3, alpha = 0.8) + 
+  stat_cor(method = 'pearson', aes(x = `1`, y = `2`), size = 6, p.digits = 1) + 
+  geom_abline(intercept = 0, slope = 1, color = 'grey', linetype = 'solid') + 
+  scale_y_continuous(limits = c(10, 40)) + 
+  scale_x_continuous(limits = c(10, 40)) +
+  labs(x = 'Day 1 (°)', y = 'Day 2 (°)') + 
+  coord_capped_cart(left = 'top', bottom = 'right') +
+  th
+print(ae.rel)
+
+```
+
+```{r}
+
+ps.rel <- hand_param %>%
+  select(SN, Day, PB) %>% 
+  spread(Day, PB) %>% 
+  ggplot(aes(x = `1`, y = `2`, label = SN)) +
+  geom_point(color = my.colors[2], size = 3, alpha = 0.8) + 
+  stat_cor(method = 'pearson', aes(x = `1`, y = `2`), size = 6, p.digits = 1) + 
+  geom_abline(intercept = 0, slope = 1, color = 'grey', linetype = 'solid') + 
+  scale_y_continuous(limits = c(-20, 10)) + 
+  scale_x_continuous(limits = c(-20, 10)) +
+  labs(x = 'Day 1 (°)', y = 'Day 2 (°)') + 
+  coord_capped_cart(left = 'top', bottom = 'right') +
+  th 
+print(ps.rel)
+
+```
+
+```{r}
+
+pv.rel <- hand_param %>% select(SN, Day, PBvar_ang) %>% 
+  spread(Day, PBvar_ang) %>% 
+  ggplot(aes(x = `1`, y = `2`, label = SN)) +
+  geom_point(color = my.colors2[4], size = 3, alpha = 0.8) + 
+  stat_cor(method = 'pearson', aes(x = `1`, y = `2`), size = 6, p.digits = 1) + 
+  geom_abline(intercept = 0, slope = 1, color = 'grey', linetype = 'solid') + 
+  scale_y_continuous(limits = c(0, 20)) + 
+  scale_x_continuous(limits = c(0, 20)) +
+  labs(x = 'Day 1 (°)', y = 'Day 2 (°)') + 
+  coord_capped_cart(left = 'top', bottom = 'right') +
+  th + theme(axis.title.y = element_text(margin = margin(l = 0, r = 18, t = 0, b = 0)))
+print(pv.rel)
+
+```
+
+Correlation between prop var and aftereffect
+```{r}
+
+af.pv.cor.all.ang <- hand_param %>% 
+  ggplot(aes(x = PBvarall_ang, y = AEall)) +
+  geom_smooth(method = 'lm', formula = 'y~x', color = 'black', alpha = 0.2) + 
+  geom_point(color = 'black', size = 3, alpha = 1) + 
+  ggpubr::stat_cor(method = 'pearson', aes(x = PBvarall_ang, y = AEall), size = 6) + 
+  #scale_y_continuous(limits = c(10, 40), breaks = seq(10, 40, 10)) + 
+  #scale_x_continuous(limits = c(4, 13), breaks = seq(4, 12, 4)) +
+  #facet_grid(.~Day) + 
+  labs(x = 'Proprioceptive Variability (°)', y = 'Aftereffect (°)') + 
+  coord_capped_cart(left = 'top', bottom = 'right') +
+  th
+print(af.pv.cor.all.ang)
+
+```
+
+
+```{r}
+
+af.pv.cor.all <- hand_param %>% 
+  ggplot(aes(x = PBvarall, y = AEall)) +
+  geom_smooth(method = 'lm', formula = 'y~x', color = 'black', alpha = 0.2) + 
+  geom_point(color = 'black', size = 3, alpha = 1) + 
+  ggpubr::stat_cor(method = 'pearson', aes(x = PBvarall, y = AEall), size = 6) + 
+  scale_y_continuous(limits = c(10, 40), breaks = seq(10, 40, 10)) + 
+  scale_x_continuous(limits = c(15, 35)) +
+  labs(x = 'Proprioceptive Variability (mm)', y = 'Aftereffect (°)') + 
+  coord_capped_cart(left = 'top', bottom = 'right') +
+  th
+print(af.pv.cor.all)
+
+```
+
+```{r}
+
+af.pv.cor <- hand_param %>% 
+  ggplot(aes(x = PBvarbase, y = AEall)) +
+  geom_smooth(method = 'lm', formula = 'y~x', color = 'black', alpha = 0.2) + 
+  geom_point(color = 'black', size = 3, alpha = 1) + 
+  ggpubr::stat_cor(method = 'pearson', aes(x = PBvarbase, y = AEall), size = 6) + 
+  scale_y_continuous(limits = c(10, 35), breaks = seq(10, 35, 5)) + 
+  labs(x = 'Baseline Prop. Var. (mm)', y = 'Aftereffect (°)') + 
+  coord_capped_cart(left = 'top', bottom = 'right') +
+  th
+print(af.pv.cor)
+
+```
+
+```{r}
+
+af.ps.cor <- hand_param %>% 
+  ggplot(aes(x = PBshiftall, y = AEall)) +
+  geom_smooth(method = 'lm', formula = 'y~x', color = 'black', alpha = 0.2) + 
+  geom_point(color = 'black', size = 3, alpha = 1) + 
+  stat_cor(method = 'spearman', aes(x = PBshiftall, y = AEall), size = 6) + 
+  labs(x = 'Proprioceptive Shift (°)', y = 'Aftereffect (°)') + 
+  coord_capped_cart(left = 'top', bottom = 'right') +
+  th + theme(axis.title.y = element_text(margin = margin(l = 0, r = 18, t = 0, b = 0)))
+print(af.ps.cor)
+
+```
+
+```{r}
+
+pv.ps.cor <- hand_param %>% 
+  ggplot(aes(x = PBvarall_ang, y = PBshiftall)) +
+  geom_smooth(method = 'lm', formula = 'y~x', color = 'black', alpha = 0.2) + 
+  geom_point(color = 'black', size = 3, alpha = 1) + 
+  stat_cor(method = 'pearson', aes(x = PBvarall, y = PBshiftall), size = 6) + 
+  scale_y_continuous(limits = c(-15, 5)) + 
+  labs(x = 'Proprioceptive Variability (°)', y = 'Proprioceptive Shift (°)') + 
+  coord_capped_cart(left = 'top', bottom = 'right') +
+  th
+print(pv.ps.cor)
+
+```
+
+
+
+
