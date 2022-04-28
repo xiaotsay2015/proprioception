@@ -6,7 +6,7 @@ output: html_notebook
 ```{r}
 rm(list = ls())
 
-text_size <- 22
+text_size <- 14
 options(digits = 4) 
 library(tidyverse)
 library(ggpubr)
@@ -257,6 +257,10 @@ e2.grp.prop <- e2.ind.prop %>%
 
 e2.learnhand <- e2.grp.hand
 
+# setwd("~/Desktop")
+# write.csv(e2.learnhand,"Learn_ParvinE2.csv")
+# write.csv(e2.grp.prop,"Prop_ParvinE2.csv")
+
 ref.lines <- c(9.5, 36.5,  72.5,  108.5, 144.5, 180.5, 270.5, 360.5, 396.5, 486.5, 522.5, 612.5, 648.5, 738.5)
 
 my.grp.plot <- ggplot(data = e2.learnhand, aes(x = TN, y = Hand)) + 
@@ -353,6 +357,10 @@ for(si in 1:num.subj){
   
   counter = counter + 1
 }
+
+# setwd("~/Desktop")
+# write.csv(hand_param,"HandParam_ParvinE2.csv")
+
 
 ```
 
@@ -518,6 +526,45 @@ print(af.ps.cor2)
 ```
 
 
+
+```{r}
+
+early.pv.cor <- hand_param %>% 
+  ggplot(aes(x = PBvarall, y = Early_Adapt)) +
+  geom_smooth(method = 'lm', formula = 'y~x', color = 'black', alpha = 0.2) + 
+  geom_point(color = 'black', alpha = 1) + 
+  ggpubr::stat_cor(method = 'spearman', aes(x = PBvarall, y = Early_Adapt)) + 
+  labs(x = 'Proprioceptive Variability (mm)', y = 'Early Adapt (°)') + 
+  th
+print(early.pv.cor)
+
+setwd("~/Desktop")
+ggsave("early_pv_cor.pdf",
+       plot = early.pv.cor, height = 3, width = 3.5,  units = "in")
+
+```
+
+```{r}
+
+early.ps.cor <- hand_param %>% 
+  ggplot(aes(x = PBshiftall, y = Early_Adapt)) +
+  geom_smooth(method = 'lm', formula = 'y~x', color = 'black', alpha = 0.2) + 
+  geom_point(color = 'black', size = 1, alpha = 1) + 
+  ggpubr::stat_cor(method = 'spearman', aes(x = PBshiftall, y = Early_Adapt)) + 
+  #scale_y_continuous(limits = c(10, 35), breaks = seq(10, 35, 5)) + 
+  #scale_x_continuous(limits = c(10, 40)) +
+  #facet_grid(.~Day) + 
+  labs(x = 'Proprioceptive Shift (°)', y = 'Early Adapt (°)') + 
+  #coord_capped_cart(left = 'top', bottom = 'right') +
+  th
+print(early.ps.cor)
+
+setwd("~/Desktop")
+ggsave("early_ps_cor.pdf",
+       plot = early.ps.cor, height = 3, width = 3.5,  units = "in")
+
+
+```
 
 
 

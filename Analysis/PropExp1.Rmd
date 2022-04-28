@@ -102,14 +102,14 @@ Load Data and Define Parameters
 e1.data <- read.csv('~/Dropbox/MOTOR/proprioception/Data/E1_processed_data.csv',header=TRUE, sep=",") %>%
   mutate(Direction = ifelse(rot_cond == 30, 'CCW', 'CW')) %>% 
   mutate(Hand = hand_theta_maxv) %>% 
-  select(SN, TN, CN, day_num, Direction, Hand, ri, ti, fbi, MT, RT, FC_bias_X, FC_bias_Y, prop_theta, PropLocX, PropLocY, ri, PropTestAng)
+  select(SN, TN, CN, day_num, Direction, Hand, ri, ti, fbi, MT, RT, FC_bias_X, FC_bias_Y, prop_theta, PropLocX, PropLocY, ri, PropTestAng, FC_TT)
 
 e1.hand <- e1.data %>%  
   select(SN, TN, CN, day_num, Direction, ri, Hand, ti, fbi, MT, RT) %>%
   drop_na
 
 e1.prop <- e1.data %>%
-  select(SN, TN, CN, day_num, Direction,  FC_bias_X, FC_bias_Y, prop_theta, PropLocX, PropLocY, PropTestAng) %>%
+  select(SN, TN, CN, day_num, Direction,  FC_bias_X, FC_bias_Y, prop_theta, PropLocX, PropLocY, PropTestAng, FC_TT) %>%
   drop_na
 
 reach.tar <- sort(unique(e1.hand$ti))
@@ -150,10 +150,12 @@ for(si in 1:num.subj ){
       smoothed_sd <- sd( e1.hand$Hand[idx_sub] - movavg(e1.hand$Hand[idx_sub], 5, type=c("s"))) 
       idx_remove <- ( abs(e1.hand$Hand[idx_sub] - movavg(e1.hand$Hand[idx_sub], 5, type=c("s"))))  > 3*smoothed_sd
       e1.hand$Hand[idx_sub][idx_remove] <- NaN
-    
+      e1.hand$Hand_dt[idx_sub] <- e1.hand$Hand[idx_sub] - movavg(e1.hand$Hand[idx_sub], 5, type=c("s"))
+      
       smoothed_RT_sd <- sd( e1.hand$RT[idx_sub] - movavg(e1.hand$RT[idx_sub], 5, type=c("s"))) 
       idx_RT_remove <- ( abs(e1.hand$RT[idx_sub] - movavg(e1.hand$RT[idx_sub], 5, type=c("s"))))  > 3*smoothed_RT_sd
       e1.hand$RT[idx_sub][idx_RT_remove] <- NaN
+      e1.hand$RT_dt[idx_sub] <- e1.hand$RT[idx_sub] - movavg(e1.hand$RT[idx_sub], 5, type=c("s"))
       
       subj_compile[ subj_compile$SN == subjects[si] & subj_compile$Day == di, sprintf('T%s_rm', reach.tar[mi]) ] <- length(e1.hand$Hand[idx_sub][idx_remove])
       subj_compile[ subj_compile$SN == subjects[si] & subj_compile$Day == di, sprintf('T%s_sd', reach.tar[mi]) ] <-  smoothed_sd
@@ -276,6 +278,11 @@ add_Day <- function(x){
   new_Day <- sprintf('Day %s', x)
 }
 
+# setwd("~/Desktop")
+# write.csv(e1.learnhand, "e1.learnhand.csv")
+# write.csv(e1.afterhand, "e1.afterhand.csv")
+# write.csv(e1.grp.prop, "e1.grpprop.csv")
+
 my.grp.plot <- ggplot(data = e1.learnhand, aes(x = TN, y = Hand)) + 
   annotate('segment', x = 0, xend = 450, y = 0, yend = 0) + 
   annotate('segment', x = c(10.5, 20.5, 70.5, 160.5, 165.5, 195.5, 235.5, 265.5, 305.5, 310.5, 340.5, 380.5, 385.5, 415.5, 420.5), xend =c(10.5, 20.5, 70.5, 160.5, 165.5, 195.5, 235.5, 265.5, 305.5, 310.5, 340.5, 380.5, 385.5, 415.5, 420.5), y = -10, yend = 30, linetype = 'dotted', color = 'grey') + 
@@ -360,6 +367,12 @@ for(si in 1:num.subj){
     hand_param$PB4[counter] <- mean(e1.ind.prop$prop_theta[idx.prop & e1.ind.prop$TN >=  386 & e1.ind.prop$TN <=  415], na.rm = TRUE)
     hand_param$PB[counter] <-  mean(e1.ind.prop$prop_theta[idx.prop & e1.ind.prop$TN >=  166], na.rm = TRUE)
     hand_param$PBvar_ang[counter] <-  sd ( e1.ind.prop$prop_theta[idx.prop & e1.ind.prop$TN >=  166] )
+    hand_param$PropTimeDay[counter] <- mean(e1.prop$FC_TT[e1.prop$SN == subjects[si] & e1.prop$day_num == di], na.rm = TRUE)
+    hand_param$PropTime[counter] <- mean(e1.prop$FC_TT[e1.prop$SN == subjects[si]], na.rm = TRUE)
+    hand_param$RTvarDay[counter] <- mean(e1.hand$RT_dt[e1.hand$SN == subjects[si] & e1.hand$day_num == di], na.rm = TRUE)
+    hand_param$RTvar[counter] <- mean(e1.hand$RT_dt[e1.hand$SN == subjects[si]], na.rm = TRUE)
+    hand_param$HandvarDay[counter] <- mean(e1.hand$Hand_dt[e1.hand$SN == subjects[si] & e1.hand$day_num == di], na.rm = TRUE)
+    hand_param$Handvar[counter] <- mean(e1.hand$Hand_dt[e1.hand$SN == subjects[si]], na.rm = TRUE)
     
     idx_var1 <- e1.prop$SN == si & e1.prop$TN >= prop_start[1] & e1.prop$TN <= prop_end[1] & e1.prop$day_num == di
     idx_var2 <- e1.prop$SN == si & e1.prop$TN >= prop_start[2] & e1.prop$day_num == di
@@ -403,7 +416,34 @@ for(si in 1:num.subj){
   
 }
 
+
 ```
+
+Multiple Regression
+```{r}
+
+library(L1pack)
+
+
+hand_param <- hand_param %>% mutate(PBshiftall_trans = PBshiftall)
+
+#hand_param <- hand_param %>% mutate(PBshiftall_trans = scale(PBshiftall))
+
+addmodlm <- lm(AEall ~ PBvarall_ang + PBshiftall_trans, data = hand_param[hand_param$Day == 1, ])
+summary(addmodlm)
+AIC(addmodlm)
+
+varmodlm <- lm(AEall ~ PBvarall_ang, data = hand_param %>% filter(Day == 1))
+summary(varmodlm)
+AIC(varmodlm)
+
+shiftmodlm <- lm(AEall ~ PBshiftall_trans, data = hand_param %>% filter(Day == 1))
+summary(shiftmodlm)
+AIC(shiftmodlm)
+
+
+```
+
 
 Correlations
 ```{r}
@@ -611,5 +651,9 @@ print(pv.ps.cor)
 ```
 
 
+
+```{r}
+
+```
 
 
